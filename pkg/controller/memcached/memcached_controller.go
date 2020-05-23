@@ -2,8 +2,8 @@ package memcached
 
 import (
 	"context"
-	"reflect"
 	"k8s.io/apimachinery/pkg/types"
+	"reflect"
 
 	cachev1alpha1 "github.com/marshall628/memcached-operator/pkg/apis/cache/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -113,7 +113,7 @@ func (r *ReconcileMemcached) Reconcile(request reconcile.Request) (reconcile.Res
 			reqLogger.Error(err, "Failed to create a new Deployment", "Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
 			return reconcile.Result{}, err
 		}
-		return reconcile.Result{}, nil
+		return reconcile.Result{Requeue: true}, nil
 	} else if err != nil {
 		reqLogger.Error(err, "Failed to get Deployment")
 		return reconcile.Result{}, err
@@ -130,6 +130,22 @@ func (r *ReconcileMemcached) Reconcile(request reconcile.Request) (reconcile.Res
 		}
 		// Spec got updated
 		return reconcile.Result{Requeue: true}, nil
+	}
+
+	// Check if service already existes, if not create a new one
+	service := &corev1.Service{}
+	err = r.client.Get(context.TODO(), types.NamespacedName{Name: memcached.Name, Namespace: memcached.Namespace}, service)
+	if err != nil && errors.IsNotFound(err) {
+		ser := r.serviceForMemCached(memcached)
+		reqLogger.Info("Creating a new Service.", "Service.Namespace", ser.Namespace, "Service.Name", ser.Name)
+		err = r.client.Create(context.TODO(), ser)
+		if err != nil {
+			reqLogger.Error(err, "Failed to create new Service.", "SErvice.Namespace", ser.Namespace, "Service.Name", ser.Name)
+			return reconcile.Result{}, err
+		}
+	} else if err != nil {
+		reqLogger.Error(err, "Failed to get Service.")
+		return reconcile.Result{}, err
 	}
 
 	// Update Memcached status with the pod names
@@ -193,6 +209,28 @@ func (r *ReconcileMemcached) deploymentForMemcached(m *cachev1alpha1.Memcached) 
 	// Set Memcached instance as the owner and controller
 	controllerutil.SetControllerReference(m, dep, r.scheme)
 	return dep
+}
+
+func (r *ReconcileMemcached) serviceForMemCached(m *cachev1alpha1.Memcached) *corev1.Service {
+	ls := labelsForMemcached(m.Name)
+	ser := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: m.Name,
+			Namespace: m.Namespace,
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: ls,
+			Ports: []corev1.ServicePort{
+				{
+					Port: 11211,
+					Name: m.Name,
+				},
+			},
+		},
+	}
+
+	controllerutil.SetControllerReference(m, ser, r.scheme)
+	return ser
 }
 
 func labelsForMemcached(name string) map[string]string {
